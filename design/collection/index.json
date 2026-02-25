@@ -1,0 +1,22 @@
+{
+  "spells": [
+    {
+      "trigger": "hello",
+      "description": "A simple spell generate \"Hello world!\"",
+      "tags": [],
+      "entry": {
+        "default": "echo 'Hello world!'"
+      },
+      "settings": {
+        "doPaste": true
+      }
+    },
+    {
+      "trigger": "upper case",
+      "description": "Convert all letters to upper case",
+      "entry": {
+        "default": "python upper.py"
+      }
+    }
+  ]
+}
