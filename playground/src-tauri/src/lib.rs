@@ -3,27 +3,77 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
+// Stores the previous window as an isize.
+// Windows: HWND cast to isize
+// macOS:   process ID (i32) cast to isize
 struct PrevWindow(Mutex<isize>);
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use objc::{class, msg_send, runtime::Object};
+
+    pub unsafe fn get_frontmost_pid() -> i32 {
+        let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let app: *mut Object = msg_send![workspace, frontmostApplication];
+        if app.is_null() {
+            return 0;
+        }
+        msg_send![app, processIdentifier]
+    }
+
+    pub unsafe fn activate_pid(pid: i32) {
+        let app: *mut Object = msg_send![
+            class!(NSRunningApplication),
+            runningApplicationWithProcessIdentifier: pid
+        ];
+        if app.is_null() {
+            return;
+        }
+        // NSApplicationActivateIgnoringOtherApps = 1
+        let _: () = msg_send![app, activateWithOptions: 1u64];
+    }
+}
+
+fn save_prev_window(state: &PrevWindow) {
+    #[cfg(target_os = "windows")]
+    {
+        let hwnd = unsafe { winapi::um::winuser::GetForegroundWindow() };
+        *state.0.lock().unwrap() = hwnd as isize;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let pid = unsafe { macos::get_frontmost_pid() };
+        *state.0.lock().unwrap() = pid as isize;
+    }
+}
+
+fn restore_prev_window(val: isize) {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        if val != 0 {
+            winapi::um::winuser::SetForegroundWindow(
+                val as winapi::shared::windef::HWND
+            );
+        }
+    }
+    #[cfg(target_os = "macos")]
+    unsafe {
+        if val != 0 {
+            macos::activate_pid(val as i32);
+        }
+    }
+}
 
 #[tauri::command]
 fn apply_spell(app: AppHandle, state: tauri::State<'_, PrevWindow>) {
-    let hwnd_val = *state.0.lock().unwrap();
+    let prev = *state.0.lock().unwrap();
 
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }
 
-    // Restore focus to the original window
-    #[cfg(target_os = "windows")]
-    unsafe {
-        if hwnd_val != 0 {
-            winapi::um::winuser::SetForegroundWindow(
-                hwnd_val as winapi::shared::windef::HWND
-            );
-        }
-    }
+    restore_prev_window(prev);
 
-    // Wait for focus to settle before simulating paste
     std::thread::sleep(std::time::Duration::from_millis(50));
 
     if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
@@ -49,26 +99,18 @@ pub fn run() {
                     return;
                 }
 
-                // Save the currently focused window before we steal focus
-                #[cfg(target_os = "windows")]
-                {
-                    let hwnd = unsafe { winapi::um::winuser::GetForegroundWindow() };
-                    if let Some(state) = app.try_state::<PrevWindow>() {
-                        *state.0.lock().unwrap() = hwnd as isize;
-                    }
+                if let Some(state) = app.try_state::<PrevWindow>() {
+                    save_prev_window(&state);
                 }
 
-                // Simulate Ctrl+C on the currently focused window
                 if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
                     let _ = enigo.key(Key::Control, Direction::Press);
                     let _ = enigo.key(Key::Unicode('c'), Direction::Click);
                     let _ = enigo.key(Key::Control, Direction::Release);
                 }
 
-                // Brief pause for clipboard to update
                 std::thread::sleep(std::time::Duration::from_millis(100));
 
-                // Show our window
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
