@@ -111,9 +111,17 @@ pub fn run() {
                     return;
                 }
 
-                if let Some(state) = app.try_state::<PrevWindow>() {
+                let prev = if let Some(state) = app.try_state::<PrevWindow>() {
                     save_prev_window(&state);
-                }
+                    *state.0.lock().unwrap()
+                } else {
+                    0
+                };
+
+                // Explicitly re-activate the previous app before simulating copy,
+                // because the shortcut handler briefly makes our process active on macOS.
+                restore_prev_window(prev);
+                std::thread::sleep(std::time::Duration::from_millis(50));
 
                 if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
                     simulate_copy(&mut enigo);
