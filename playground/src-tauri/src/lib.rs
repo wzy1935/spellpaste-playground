@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use serde::{Deserialize, Serialize};
@@ -19,13 +19,23 @@ struct IndexEntry {
     default: String,
 }
 
-#[derive(Deserialize)]
-struct IndexSettings {
-    #[serde(rename = "doPaste", default = "default_true")]
-    do_paste: bool,
+#[derive(Deserialize, Clone, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+enum OutputMode {
+    None,
+    Clipboard,
+    Preview,
+    #[default]
+    Paste,
 }
 
-fn default_true() -> bool { true }
+#[derive(Deserialize)]
+struct IndexSettings {
+    #[serde(rename = "outputMode", default)]
+    output_mode: OutputMode,
+    #[serde(rename = "streamMode", default)]
+    stream_mode: bool,
+}
 
 #[derive(Deserialize)]
 struct SpellDef {
@@ -45,13 +55,22 @@ struct LoadedSpell {
     description: Option<String>,
     collection_dir: PathBuf,
     entry_cmd: String,
-    do_paste: bool,
+    output_mode: OutputMode,
+    stream_mode: bool,
 }
 
 #[derive(Serialize, Clone)]
 struct SpellInfo {
     trigger: String,
     description: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+enum SpellResult {
+    Done,
+    Preview { content: String },
+    Stream,
 }
 
 // ---- macOS platform module ----
@@ -220,7 +239,8 @@ fn load_collections(dir: &Path) -> Vec<LoadedSpell> {
                 description: def.description,
                 collection_dir: path.clone(),
                 entry_cmd: def.entry.default,
-                do_paste: def.settings.map(|s| s.do_paste).unwrap_or(true),
+                output_mode: def.settings.as_ref().map(|s| s.output_mode.clone()).unwrap_or_default(),
+                stream_mode: def.settings.map(|s| s.stream_mode).unwrap_or(false),
             });
         }
     }
@@ -229,7 +249,7 @@ fn load_collections(dir: &Path) -> Vec<LoadedSpell> {
 
 // ---- Spell execution ----
 
-fn execute_spell(entry_cmd: &str, collection_dir: &Path, input: &str) -> Result<String, String> {
+fn spawn_entry(entry_cmd: &str, collection_dir: &Path, input: &str) -> Result<std::process::Child, String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -252,8 +272,98 @@ fn execute_spell(entry_cmd: &str, collection_dir: &Path, input: &str) -> Result<
         let _ = stdin.write_all(input.as_bytes());
     }
 
-    let output = child.wait_with_output().map_err(|e| e.to_string())?;
+    Ok(child)
+}
+
+fn execute_spell(entry_cmd: &str, collection_dir: &Path, input: &str) -> Result<String, String> {
+    let output = spawn_entry(entry_cmd, collection_dir, input)?
+        .wait_with_output()
+        .map_err(|e| e.to_string())?;
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn pipe_stdout_to_channel(stdout: std::process::ChildStdout) -> std::sync::mpsc::Receiver<String> {
+    use std::io::Read;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut stdout = stdout;
+        let mut buf = [0u8; 4096];
+        loop {
+            match stdout.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let s = String::from_utf8_lossy(&buf[..n]).into_owned();
+                    if tx.send(s).is_err() { break; }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    rx
+}
+
+// Calls on_flush every 200ms with the text accumulated so far.
+// on_flush(chunk, is_final): is_final=true on the last call (process done).
+fn stream_batched(rx: std::sync::mpsc::Receiver<String>, mut on_flush: impl FnMut(&str, bool)) {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    let flush_interval = Duration::from_millis(200);
+    let mut buf = String::new();
+    loop {
+        let deadline = Instant::now() + flush_interval;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() { break; }
+            match rx.recv_timeout(remaining) {
+                Ok(chunk) => buf.push_str(&chunk),
+                Err(mpsc::RecvTimeoutError::Timeout) => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    on_flush(&buf, true);
+                    return;
+                }
+            }
+        }
+        if !buf.is_empty() {
+            on_flush(&buf, false);
+            buf.clear();
+        }
+    }
+}
+
+
+fn start_spell_preview_stream(entry_cmd: String, collection_dir: PathBuf, input: String, app: AppHandle) {
+    std::thread::spawn(move || {
+        let Ok(mut child) = spawn_entry(&entry_cmd, &collection_dir, &input) else {
+            let _ = app.emit("spell-stream-end", ());
+            return;
+        };
+        let rx = pipe_stdout_to_channel(child.stdout.take().unwrap());
+        stream_batched(rx, |chunk, is_final| {
+            if !chunk.is_empty() {
+                let _ = app.emit("spell-stream", chunk);
+            }
+            if is_final {
+                let _ = app.emit("spell-stream-end", ());
+            }
+        });
+        let _ = child.wait();
+    });
+}
+
+fn start_spell_type_stream(entry_cmd: String, collection_dir: PathBuf, input: String) {
+    std::thread::spawn(move || {
+        let Ok(mut enigo) = Enigo::new(&Settings::default()) else { return };
+        let Ok(mut child) = spawn_entry(&entry_cmd, &collection_dir, &input) else { return };
+        let rx = pipe_stdout_to_channel(child.stdout.take().unwrap());
+        stream_batched(rx, |chunk, _is_final| {
+            if !chunk.is_empty() {
+                let _ = enigo.text(chunk);
+            }
+        });
+        let _ = child.wait();
+    });
 }
 
 // ---- Tauri commands ----
@@ -293,38 +403,74 @@ fn apply_spell(
     prev_window: tauri::State<'_, PrevWindow>,
     store: tauri::State<'_, SpellStore>,
     selected: tauri::State<'_, SelectedText>,
-) -> Result<(), String> {
-    let (entry_cmd, collection_dir, do_paste) = {
+) -> Result<SpellResult, String> {
+    let (entry_cmd, collection_dir, output_mode, stream_mode) = {
         let spells = store.0.lock().unwrap();
         let spell = spells.iter()
             .find(|s| s.trigger == trigger)
             .ok_or_else(|| format!("Spell '{}' not found", trigger))?;
-        (spell.entry_cmd.clone(), spell.collection_dir.clone(), spell.do_paste)
+        (spell.entry_cmd.clone(), spell.collection_dir.clone(), spell.output_mode.clone(), spell.stream_mode)
     };
 
     let input = selected.0.lock().unwrap().clone();
 
+    if output_mode == OutputMode::Preview && stream_mode {
+        start_spell_preview_stream(entry_cmd, collection_dir, input, app);
+        return Ok(SpellResult::Stream);
+    }
+
+    if output_mode == OutputMode::Paste && stream_mode {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.hide();
+        }
+        let prev = *prev_window.0.lock().unwrap();
+        restore_prev_window(prev);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        start_spell_type_stream(entry_cmd, collection_dir, input);
+        return Ok(SpellResult::Done);
+    }
+
     let output = execute_spell(&entry_cmd, &collection_dir, &input)?;
 
-    if let Ok(mut clipboard) = arboard::Clipboard::new() {
-        let _ = clipboard.set_text(output.trim_end_matches('\n'));
-    }
-
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
-    }
-
-    let prev = *prev_window.0.lock().unwrap();
-    restore_prev_window(prev);
-    std::thread::sleep(std::time::Duration::from_millis(50));
-
-    if do_paste {
-        if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
-            simulate_paste(&mut enigo);
+    match output_mode {
+        OutputMode::None => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.hide();
+            }
+            let prev = *prev_window.0.lock().unwrap();
+            restore_prev_window(prev);
+            Ok(SpellResult::Done)
+        }
+        OutputMode::Clipboard => {
+            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                let _ = clipboard.set_text(output.trim_end_matches('\n'));
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.hide();
+            }
+            let prev = *prev_window.0.lock().unwrap();
+            restore_prev_window(prev);
+            Ok(SpellResult::Done)
+        }
+        OutputMode::Preview => {
+            Ok(SpellResult::Preview { content: output })
+        }
+        OutputMode::Paste => {
+            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                let _ = clipboard.set_text(output.trim_end_matches('\n'));
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.hide();
+            }
+            let prev = *prev_window.0.lock().unwrap();
+            restore_prev_window(prev);
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
+                simulate_paste(&mut enigo);
+            }
+            Ok(SpellResult::Done)
         }
     }
-
-    Ok(())
 }
 
 // ---- Entry point ----

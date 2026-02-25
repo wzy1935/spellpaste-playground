@@ -8,7 +8,7 @@
         "default": "echo 'Hello world!'"
       },
       "settings": {
-        "doPaste": true
+        "outputMode": "preview"
       }
     },
     {
@@ -16,6 +16,16 @@
       "description": "Convert all letters to upper case",
       "entry": {
         "default": "python upper.py"
+      }
+    },
+    {
+      "trigger": "stream test",
+      "description": "stream test",
+      "entry": {
+        "default": "python stream.py"
+      },
+      "settings": {
+        "outputMode": "preview"
       }
     }
   ]

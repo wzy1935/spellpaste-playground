@@ -8,11 +8,20 @@
       * { box-sizing: border-box; margin: 0; padding: 0; }
       body {
         font-family: sans-serif;
-        display: flex;
-        flex-direction: column;
         height: 100vh;
         background: #1e1e2e;
         color: #cdd6f4;
+        overflow: hidden;
+      }
+      #selector {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+      }
+      #preview {
+        display: none;
+        flex-direction: column;
+        height: 100vh;
       }
       #search {
         width: 100%;
@@ -49,12 +58,54 @@
         font-size: 13px;
         text-align: center;
       }
+      #preview-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 16px;
+        background: #181825;
+        border-bottom: 1px solid #313244;
+        flex-shrink: 0;
+      }
+      #preview-label {
+        font-size: 13px;
+        color: #a6adc8;
+      }
+      #preview-close {
+        background: #313244;
+        color: #cdd6f4;
+        border: none;
+        padding: 4px 12px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      #preview-close:hover { background: #45475a; }
+      #preview-content {
+        flex: 1;
+        overflow-y: auto;
+        padding: 12px 16px;
+        font-family: monospace;
+        font-size: 13px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        color: #cdd6f4;
+      }
     </style>
     <script type="module" src="/src/main.ts" defer></script>
   </head>
   <body>
-    <input id="search" type="text" placeholder="Search spells..." autocomplete="off" />
-    <ul id="spell-list"></ul>
-    <div id="empty" style="display:none">No spells found</div>
+    <div id="selector">
+      <input id="search" type="text" placeholder="Search spells..." autocomplete="off" />
+      <ul id="spell-list"></ul>
+      <div id="empty" style="display:none">No spells found</div>
+    </div>
+    <div id="preview">
+      <div id="preview-header">
+        <span id="preview-label">Output</span>
+        <button id="preview-close">Close</button>
+      </div>
+      <pre id="preview-content"></pre>
+    </div>
   </body>
 </html>
