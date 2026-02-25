@@ -11,6 +11,45 @@ struct PrevWindow(Mutex<isize>);
 #[cfg(target_os = "macos")]
 mod macos {
     use objc::{class, msg_send, sel, sel_impl, runtime::Object};
+    use std::ffi::c_void;
+
+    type CGEventSourceRef = *mut c_void;
+    type CGEventRef = *mut c_void;
+
+    // kCGEventSourceStatePrivate: clean slate, ignores physical key state
+    const KCG_EVENT_SOURCE_STATE_PRIVATE: i32 = -1;
+    const KCG_HID_EVENT_TAP: u32 = 0;
+    const KCG_EVENT_FLAG_MASK_COMMAND: u64 = 0x00100000;
+    const KVK_ANSI_C: u16 = 0x08;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventSourceCreate(stateID: i32) -> CGEventSourceRef;
+        fn CGEventCreateKeyboardEvent(
+            source: CGEventSourceRef,
+            virtualKey: u16,
+            keyDown: bool,
+        ) -> CGEventRef;
+        fn CGEventSetFlags(event: CGEventRef, flags: u64);
+        fn CGEventPost(tap: u32, event: CGEventRef);
+        fn CFRelease(cf: *mut c_void);
+    }
+
+    pub unsafe fn simulate_copy_private_source() {
+        let source = CGEventSourceCreate(KCG_EVENT_SOURCE_STATE_PRIVATE);
+
+        let key_down = CGEventCreateKeyboardEvent(source, KVK_ANSI_C, true);
+        CGEventSetFlags(key_down, KCG_EVENT_FLAG_MASK_COMMAND);
+        CGEventPost(KCG_HID_EVENT_TAP, key_down);
+        CFRelease(key_down);
+
+        let key_up = CGEventCreateKeyboardEvent(source, KVK_ANSI_C, false);
+        CGEventSetFlags(key_up, KCG_EVENT_FLAG_MASK_COMMAND);
+        CGEventPost(KCG_HID_EVENT_TAP, key_up);
+        CFRelease(key_up);
+
+        CFRelease(source);
+    }
 
     pub unsafe fn get_frontmost_pid() -> i32 {
         let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
@@ -47,11 +86,16 @@ fn save_prev_window(state: &PrevWindow) {
     }
 }
 
-fn simulate_copy(enigo: &mut Enigo) {
-    let modifier = if cfg!(target_os = "macos") { Key::Meta } else { Key::Control };
-    let _ = enigo.key(modifier, Direction::Press);
-    let _ = enigo.key(Key::Unicode('c'), Direction::Click);
-    let _ = enigo.key(modifier, Direction::Release);
+fn simulate_copy(_enigo: &mut Enigo) {
+    #[cfg(target_os = "macos")]
+    unsafe { macos::simulate_copy_private_source() };
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = _enigo.key(Key::Control, Direction::Press);
+        let _ = _enigo.key(Key::Unicode('c'), Direction::Click);
+        let _ = _enigo.key(Key::Control, Direction::Release);
+    }
 }
 
 fn simulate_paste(enigo: &mut Enigo) {
