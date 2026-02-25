@@ -13,6 +13,36 @@ type SpellResult =
 
 let spells: SpellInfo[] = [];
 let selectedIndex = 0;
+let recentTriggers: string[] = [];
+
+const MAX_RECENT = 5;
+
+function loadRecent() {
+  try {
+    const stored = localStorage.getItem("recentTriggers");
+    recentTriggers = stored ? JSON.parse(stored) : [];
+  } catch {
+    recentTriggers = [];
+  }
+}
+
+function saveRecent(trigger: string) {
+  recentTriggers = [trigger, ...recentTriggers.filter(t => t !== trigger)].slice(0, MAX_RECENT);
+  localStorage.setItem("recentTriggers", JSON.stringify(recentTriggers));
+}
+
+function getDisplayList(query: string): SpellInfo[] {
+  if (query === "") {
+    const recent = recentTriggers
+      .map(t => spells.find(s => s.trigger === t))
+      .filter((s): s is SpellInfo => s !== undefined);
+    return recent;
+  }
+  return spells.filter(
+    s => s.trigger.toLowerCase().includes(query) ||
+         (s.description?.toLowerCase().includes(query) ?? false)
+  );
+}
 
 // ---- State management ----
 
@@ -36,7 +66,7 @@ function showPreview(streaming: boolean) {
 
 async function loadSpells() {
   spells = await invoke<SpellInfo[]>("get_spells");
-  renderSpells(spells);
+  renderSpells(getDisplayList(""));
 }
 
 function renderSpells(list: SpellInfo[]) {
@@ -78,6 +108,7 @@ function updateSelection(list: NodeListOf<HTMLLIElement>, index: number) {
 }
 
 async function applySpell(trigger: string) {
+  saveRecent(trigger);
   const result = await invoke<SpellResult>("apply_spell", { trigger });
   if (result.mode === "preview") {
     document.getElementById("preview-content")!.textContent = result.content;
@@ -112,6 +143,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("preview-label")!.textContent = "Output";
   });
 
+  loadRecent();
   loadSpells();
   const search = document.getElementById("search") as HTMLInputElement;
   search.focus();
@@ -121,13 +153,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
 
   search.addEventListener("input", () => {
-    const query = search.value.toLowerCase();
-    const filtered = spells.filter(
-      (s) =>
-        s.trigger.toLowerCase().includes(query) ||
-        (s.description?.toLowerCase().includes(query) ?? false)
-    );
-    renderSpells(filtered);
+    renderSpells(getDisplayList(search.value.toLowerCase()));
   });
 
   document.addEventListener("keydown", (e) => {

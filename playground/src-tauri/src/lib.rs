@@ -132,6 +132,11 @@ mod macos {
         if app.is_null() { return; }
         let _: () = msg_send![app, activateWithOptions: 1u64];
     }
+
+    pub unsafe fn pasteboard_change_count() -> isize {
+        let pasteboard: *mut Object = msg_send![class!(NSPasteboard), generalPasteboard];
+        msg_send![pasteboard, changeCount]
+    }
 }
 
 // ---- OS helpers ----
@@ -188,6 +193,20 @@ fn simulate_copy(_enigo: &mut Enigo) {
         let _ = _enigo.key(Key::Unicode('c'), Direction::Click);
         let _ = _enigo.key(Key::Control, Direction::Release);
     }
+}
+
+// Returns a clipboard generation counter that increments on every clipboard
+// update — even when the new content is identical to the previous content.
+// Used to detect whether Ctrl+C actually copied anything.
+fn clipboard_generation() -> u64 {
+    #[cfg(target_os = "windows")]
+    return unsafe { winapi::um::winuser::GetClipboardSequenceNumber() } as u64;
+
+    #[cfg(target_os = "macos")]
+    return unsafe { macos::pasteboard_change_count() } as u64;
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    return 0;
 }
 
 fn simulate_paste(enigo: &mut Enigo) {
@@ -503,9 +522,7 @@ pub fn run() {
                     save_prev_window(&state);
                 }
 
-                let before = arboard::Clipboard::new()
-                    .and_then(|mut c| c.get_text())
-                    .unwrap_or_default();
+                let gen_before = clipboard_generation();
 
                 if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
                     simulate_copy(&mut enigo);
@@ -513,12 +530,18 @@ pub fn run() {
 
                 std::thread::sleep(std::time::Duration::from_millis(100));
 
-                let after = arboard::Clipboard::new()
-                    .and_then(|mut c| c.get_text())
-                    .unwrap_or_default();
-
-                // If clipboard didn't change, nothing was selected → use empty string
-                let selected = if after != before { after } else { String::new() };
+                // The clipboard generation counter increments on every clipboard update,
+                // even when the new content is identical to the old content. This correctly
+                // handles two edge cases that a simple before/after content comparison fails:
+                //   - Selecting the same text twice: counter increments → detected as selection.
+                //   - Selecting nothing: Ctrl+C has no effect → counter unchanged → empty input.
+                let selected = if clipboard_generation() != gen_before {
+                    arboard::Clipboard::new()
+                        .and_then(|mut c| c.get_text())
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
                 if let Some(state) = app.try_state::<SelectedText>() {
                     *state.0.lock().unwrap() = selected;
                 }
