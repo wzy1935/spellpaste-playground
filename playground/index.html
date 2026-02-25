@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spellpaste</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: sans-serif;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        height: 100vh;
+        padding: 0 16px;
+        background: #1e1e2e;
+        color: #cdd6f4;
+      }
+      #status {
+        flex: 1;
+        font-size: 14px;
+        color: #a6adc8;
+      }
+      button {
+        padding: 8px 20px;
+        font-size: 14px;
+        cursor: pointer;
+        background: #89b4fa;
+        color: #1e1e2e;
+        border: none;
+        border-radius: 6px;
+        font-weight: 600;
+      }
+      button:hover { background: #74c7ec; }
+    </style>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <span id="status">Ready — Ctrl+Space to trigger</span>
+    <button id="apply-btn">Apply Spell</button>
+  </body>
+</html>

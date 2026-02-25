@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo --version && rustc --version && node --version && npm --version 2>&1)",
+      "Bash(cd E:/code/spellpaste/playground && npm create tauri-app@latest . -- --template vanilla-ts --identifier com.spellpaste.playground --manager npm --yes 2>&1)",
+      "Bash(cd E:/code/spellpaste/playground && npm install 2>&1)"
+    ]
+  }
+}
