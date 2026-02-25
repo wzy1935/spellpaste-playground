@@ -384,8 +384,9 @@ pub fn run() {
             })?;
 
             let refresh_item = MenuItem::with_id(app, "refresh", "Refresh Spells", true, None::<&str>)?;
+            let open_item = MenuItem::with_id(app, "open_collections", "Open Collections Folder", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&refresh_item, &quit_item])?;
+            let menu = Menu::with_items(app, &[&refresh_item, &open_item, &quit_item])?;
 
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
@@ -397,6 +398,14 @@ pub fn run() {
                             app.try_state::<CollectionsDir>(),
                         ) {
                             *store.0.lock().unwrap() = load_collections(&dir.0);
+                        }
+                    }
+                    "open_collections" => {
+                        if let Some(dir) = app.try_state::<CollectionsDir>() {
+                            #[cfg(target_os = "macos")]
+                            let _ = std::process::Command::new("open").arg(&dir.0).spawn();
+                            #[cfg(target_os = "windows")]
+                            let _ = std::process::Command::new("explorer").arg(&dir.0).spawn();
                         }
                     }
                     "quit" => app.exit(0),
