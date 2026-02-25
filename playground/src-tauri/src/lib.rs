@@ -10,7 +10,7 @@ struct PrevWindow(Mutex<isize>);
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use objc::{class, msg_send, runtime::Object};
+    use objc::{class, msg_send, sel, sel_impl, runtime::Object};
 
     pub unsafe fn get_frontmost_pid() -> i32 {
         let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
@@ -47,6 +47,20 @@ fn save_prev_window(state: &PrevWindow) {
     }
 }
 
+fn simulate_copy(enigo: &mut Enigo) {
+    let modifier = if cfg!(target_os = "macos") { Key::Meta } else { Key::Control };
+    let _ = enigo.key(modifier, Direction::Press);
+    let _ = enigo.key(Key::Unicode('c'), Direction::Click);
+    let _ = enigo.key(modifier, Direction::Release);
+}
+
+fn simulate_paste(enigo: &mut Enigo) {
+    let modifier = if cfg!(target_os = "macos") { Key::Meta } else { Key::Control };
+    let _ = enigo.key(modifier, Direction::Press);
+    let _ = enigo.key(Key::Unicode('v'), Direction::Click);
+    let _ = enigo.key(modifier, Direction::Release);
+}
+
 fn restore_prev_window(val: isize) {
     #[cfg(target_os = "windows")]
     unsafe {
@@ -77,9 +91,7 @@ fn apply_spell(app: AppHandle, state: tauri::State<'_, PrevWindow>) {
     std::thread::sleep(std::time::Duration::from_millis(50));
 
     if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
-        let _ = enigo.key(Key::Control, Direction::Press);
-        let _ = enigo.key(Key::Unicode('v'), Direction::Click);
-        let _ = enigo.key(Key::Control, Direction::Release);
+        simulate_paste(&mut enigo);
     }
 }
 
@@ -104,9 +116,7 @@ pub fn run() {
                 }
 
                 if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
-                    let _ = enigo.key(Key::Control, Direction::Press);
-                    let _ = enigo.key(Key::Unicode('c'), Direction::Click);
-                    let _ = enigo.key(Key::Control, Direction::Release);
+                    simulate_copy(&mut enigo);
                 }
 
                 std::thread::sleep(std::time::Duration::from_millis(100));
