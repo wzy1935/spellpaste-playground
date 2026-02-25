@@ -346,6 +346,9 @@ pub fn run() {
         .manage(CollectionsDir(collections_dir))
         .manage(SelectedText(Mutex::new(String::new())))
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             let shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::Space);
             app.global_shortcut().on_shortcut(shortcut, |app, _shortcut, event| {
                 if event.state != ShortcutState::Pressed { return; }
